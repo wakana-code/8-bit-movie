@@ -1,0 +1,900 @@
+今回は前のゲームとは別の、**自動再生する短編アニメーション**として作ります。
+
+キャラクターはドット絵、周囲は木目・石・草・光と影のあるリアル寄りの3Dです。  
+**PCで作業 → PCを持ってジャンプ → ケーキ出現 → 走り出す → ドラゴンの炎を盾で受け流す → 走り去る**ところまで入れています。
+
+`index.html` として保存して開いてください。外部ライブラリの読み込みにインターネット接続が必要です。
+
+#### MANIFEST
+```manifest
+PROJECT: pixel-cake-adventure
+TYPE: static
+FILES:
+- index.html
+```
+
+#### FILE: index.html
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ひと仕事の、その先へ。</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#141d25}
+body{font-family:"Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif;color:#f2efe5}
+canvas{display:block}
+#frame{
+  position:fixed;inset:0;pointer-events:none;
+  background:linear-gradient(#06101940,transparent 24%,transparent 70%,#06101992);
+}
+#heading{position:fixed;top:28px;left:30px;pointer-events:none;text-shadow:0 2px 15px #0007}
+#heading small{font-size:10px;letter-spacing:.27em;color:#d7dace}
+#heading h1{font-weight:500;font-size:22px;letter-spacing:.12em;margin:10px 0}
+#chapter{font-size:11px;color:#dedfd3}
+#subtitle{
+  position:fixed;left:50%;bottom:103px;transform:translateX(-50%);
+  text-align:center;font-size:15px;letter-spacing:.08em;
+  line-height:1.8;text-shadow:0 2px 14px #000;
+  width:min(90vw,800px);pointer-events:none
+}
+#controls{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+  display:flex;align-items:center;gap:12px;
+  width:min(570px,92vw);padding:12px 15px;
+  background:#10202cb5;border:1px solid #ffffff25;
+  border-radius:13px;backdrop-filter:blur(15px)
+}
+button{
+  color:#e7eddf;background:#ffffff0c;border:1px solid #ffffff29;
+  border-radius:7px;padding:9px 12px;cursor:pointer;font:inherit;font-size:11px;
+  white-space:nowrap
+}
+button:hover{background:#ffffff24}
+#track{flex:1;height:3px;background:#ffffff25;border-radius:3px;overflow:hidden}
+#progress{height:100%;width:0;background:#e5d393}
+#timer{font:10px monospace;color:#c1d0ca;white-space:nowrap}
+#ending{
+  position:fixed;inset:0;display:none;place-content:center;
+  background:#0a16255c;backdrop-filter:blur(3px);
+  text-align:center;pointer-events:none
+}
+#ending small{letter-spacing:.3em;font-size:11px}
+#ending h2{font-size:31px;letter-spacing:.16em;font-weight:400}
+#ending p{font-size:13px;line-height:2;color:#e5e8da}
+#loading{
+  position:fixed;inset:0;display:grid;place-content:center;
+  background:#182630;z-index:20;padding:25px;text-align:center;
+  font-size:13px;line-height:2
+}
+#loading small{letter-spacing:.22em;color:#b6c9c4}
+@media(max-width:650px){
+  #heading{top:18px;left:18px}
+  #heading h1{font-size:18px}
+  #subtitle{font-size:12px;bottom:99px}
+  #controls{gap:8px;padding:10px}
+  button{padding:8px 10px}
+  #ending h2{font-size:25px}
+}
+</style>
+<script type="importmap">
+{
+  "imports":{
+    "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="loading">冒険の舞台を作っています。<br><small>PIXEL / REAL WORLD</small></div>
+<div id="frame"></div>
+<header id="heading">
+  <small>A LITTLE ANIMATED ADVENTURE</small>
+  <h1>ひと仕事の、その先へ。</h1>
+  <div id="chapter">01 / あと、ひと押し。</div>
+</header>
+<div id="subtitle"></div>
+<div id="ending">
+  <small>TO BE CONTINUED</small>
+  <h2>ケーキは、無事です。</h2>
+  <p>冒険は、まだ始まったばかり。</p>
+</div>
+<div id="controls">
+  <button id="pause">一時停止</button>
+  <button id="replay">最初から</button>
+  <div id="track"><div id="progress"></div></div>
+  <span id="timer">00 / 35</span>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+const $=s=>document.querySelector(s);
+const clamp=THREE.MathUtils.clamp;
+const lerp=THREE.MathUtils.lerp;
+const smooth=(a,b,x)=>THREE.MathUtils.smoothstep(x,a,b);
+const TAU=Math.PI*2;
+const DURATION=35;
+let elapsed=0,paused=false,finished=false;
+let seed=1927;
+function random(){
+  seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+  return seed/4294967296;
+}
+
+let renderer;
+try{
+  renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+}catch(error){
+  $('#loading').textContent='WebGLを起動できませんでした。対応ブラウザとハードウェアアクセラレーションを確認してください。';
+  throw error;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.8));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.12;
+document.body.prepend(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color('#abbac0');
+scene.fog=new THREE.Fog('#abbac0',27,90);
+const camera=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,.08,150);
+const pmrem=new THREE.PMREMGenerator(renderer);
+const envRoom=new RoomEnvironment();
+const envTarget=pmrem.fromScene(envRoom,.065);
+scene.environment=envTarget.texture;
+scene.environmentIntensity=.29;
+envRoom.dispose();pmrem.dispose();
+
+function mat(color,roughness=.7,metalness=0,extra={}){
+  return new THREE.MeshStandardMaterial({color,roughness,metalness,...extra});
+}
+function group(parent=scene){
+  const g=new THREE.Group();parent.add(g);return g;
+}
+function mesh(geometry,material,parent=scene,x=0,y=0,z=0){
+  const m=new THREE.Mesh(geometry,material);
+  m.position.set(x,y,z);m.castShadow=true;m.receiveShadow=true;
+  parent.add(m);return m;
+}
+function box(w,h,d,material,parent=scene,x=0,y=0,z=0,r=.015){
+  return mesh(r>0
+    ?new RoundedBoxGeometry(w,h,d,2,Math.min(r,w/4,h/4,d/4))
+    :new THREE.BoxGeometry(w,h,d),material,parent,x,y,z);
+}
+function cylinder(top,bottom,h,material,parent,x=0,y=0,z=0,n=24){
+  return mesh(new THREE.CylinderGeometry(top,bottom,h,n),material,parent,x,y,z);
+}
+function ellipsoid(x,y,z,rx,ry,rz,material,parent){
+  const m=mesh(new THREE.SphereGeometry(1,28,18),material,parent,x,y,z);
+  m.scale.set(rx,ry,rz);return m;
+}
+function tube(points,r,material,parent){
+  const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));
+  return mesh(new THREE.TubeGeometry(curve,40,r,8,false),material,parent);
+}
+function texture(draw,size=512){
+  const c=document.createElement('canvas');c.width=c.height=size;
+  draw(c.getContext('2d'),size);
+  const t=new THREE.CanvasTexture(c);
+  t.colorSpace=THREE.SRGBColorSpace;
+  t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+  return t;
+}
+function repeat(t,x,y){
+  const c=t.clone();c.wrapS=c.wrapT=THREE.RepeatWrapping;
+  c.repeat.set(x,y);c.needsUpdate=true;return c;
+}
+const woodTex=texture((c,s)=>{
+  c.fillStyle='#997249';c.fillRect(0,0,s,s);
+  for(let i=0;i<2400;i++){
+    const y=random()*s;
+    c.strokeStyle=random()>.5?'#37220e13':'#fce6bd12';
+    c.lineWidth=.4+random();c.beginPath();
+    for(let x=0;x<=s;x+=12){
+      const yy=y+Math.sin(x*.018+y)*1.9;
+      x?c.lineTo(x,yy):c.moveTo(x,yy);
+    }c.stroke();
+  }
+});
+const stoneTex=texture((c,s)=>{
+  c.fillStyle='#8d8b7c';c.fillRect(0,0,s,s);
+  for(let i=0;i<46000;i++){
+    const v=Math.floor(65+random()*125);
+    c.fillStyle=`rgba(${v},${v},${v-7},.22)`;
+    c.fillRect(random()*s,random()*s,1+random()*3,1+random()*2);
+  }
+  for(let i=0;i<60;i++){
+    const x=random()*s,y=random()*s;
+    c.strokeStyle='#30342d1a';c.beginPath();c.moveTo(x,y);
+    c.lineTo(x+random()*30,y+random()*10);c.stroke();
+  }
+});
+const earthTex=texture((c,s)=>{
+  c.fillStyle='#626b45';c.fillRect(0,0,s,s);
+  for(let i=0;i<60000;i++){
+    c.fillStyle=['#24382824','#8b87502b','#b8a97a23'][i%3];
+    c.fillRect(random()*s,random()*s,random()*4+1,random()*3+1);
+  }
+});
+const wood=mat('#e0c8a1',.48,0,{map:woodTex,bumpMap:woodTex,bumpScale:.002});
+const stone=mat('#ded9cb',.92,0,{map:stoneTex,bumpMap:stoneTex,bumpScale:.008});
+const metal=mat('#c3ccd0',.28,.78);
+const dark=mat('#17232a',.38,.18);
+const grassMat=mat('#60734a',.96,0,{side:THREE.DoubleSide});
+
+const sun=new THREE.DirectionalLight('#fff0cd',3.1);
+sun.position.set(-7,15,9);sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.left=-15;sun.shadow.camera.right=15;
+sun.shadow.camera.top=11;sun.shadow.camera.bottom=-11;
+sun.shadow.camera.near=.1;sun.shadow.camera.far=55;
+sun.shadow.normalBias=.025;sun.shadow.bias=-.0001;
+scene.add(sun,sun.target);
+scene.add(new THREE.HemisphereLight('#ccdfec','#665c3b',1.2));
+
+box(130,.25,70,mat('#ffffff',1,0,{
+  map:repeat(earthTex,24,14),bumpMap:repeat(earthTex,24,14),bumpScale:.017
+}),scene,25,-.15,-11,0);
+
+// 土の道と個々の敷石。
+const road=mat('#b5a78c',.96,0,{map:repeat(stoneTex,18,2),bumpMap:repeat(stoneTex,18,2),bumpScale:.009});
+box(95,.02,3.7,road,scene,30,-.015,.1,0);
+for(let i=0;i<85;i++){
+  const x=-10+i*.78,z=(random()-.5)*2.9;
+  const p=box(.42+random()*.35,.04,.32+random()*.25,stone,scene,x,.007,z,.025);
+  p.rotation.y=random()*.5;
+}
+// 低い石壁。
+for(let i=0;i<47;i++){
+  for(let row=0;row<2;row++){
+    const b=box(1.08,.36,.54,stone,scene,-12+i*1.15+(row%2)*.3,.18+row*.38,-2.7,.055);
+    b.rotation.y=(random()-.5)*.055;
+  }
+}
+
+// 草はインスタンス化して負荷を抑える。
+const bladeGeo=new THREE.PlaneGeometry(.075,.34);
+bladeGeo.translate(0,.17,0);
+const blades=new THREE.InstancedMesh(bladeGeo,grassMat,3200);
+const dummy=new THREE.Object3D();
+for(let i=0;i<3200;i++){
+  const x=-15+random()*82;
+  const z=(random()>.5?1:-1)*(2.0+random()*10);
+  dummy.position.set(x,0,z);
+  dummy.rotation.set((random()-.5)*.3,random()*TAU,(random()-.5)*.2);
+  dummy.scale.set(1,.4+random()*1.4,1);dummy.updateMatrix();
+  blades.setMatrixAt(i,dummy.matrix);
+}
+blades.receiveShadow=true;scene.add(blades);
+
+// 木々と遠くの山。
+const trunkMat=mat('#66513b',.96,0,{map:woodTex,bumpMap:woodTex,bumpScale:.005});
+const leafMats=['#536744','#66794b','#455f47'].map(c=>mat(c,.98));
+for(let i=0;i<34;i++){
+  const tree=group();
+  tree.position.set(-15+i*2.6+(random()-.5),0,-5-random()*14);
+  const h=3.4+random()*4;
+  cylinder(.13,.26,h,trunkMat,tree,0,h/2,0,10);
+  for(let j=0;j<5;j++){
+    const crown=mesh(new THREE.IcosahedronGeometry(1,2),leafMats[i%3],tree,
+      (random()-.5)*1.8,h-.5+random()*1.9,(random()-.5)*1.5);
+    crown.scale.set(1.25+random(),1.5+random(),1.1+random());
+  }
+}
+for(let i=0;i<12;i++){
+  const mountain=mesh(new THREE.ConeGeometry(8+random()*8,10+random()*12,7),
+    mat('#879a97',1),scene,-25+i*10,4,-40-random()*15);
+  mountain.rotation.y=random()*TAU;
+}
+
+// 作業場所：木の机とノートPC。
+const desk=group();desk.position.set(.5,0,0);
+box(1.7,.085,1.05,wood,desk,0,.94,0);
+for(const x of [-.69,.69])for(const z of [-.38,.38]){
+  box(.075,.91,.075,wood,desk,x,.455,z);
+}
+box(1.45,.09,.055,wood,desk,0,.44,-.38);
+const deskLamp=group(desk);deskLamp.position.set(.58,.99,-.22);
+cylinder(.10,.12,.03,dark,deskLamp);
+tube([[0,0,0],[0,.34,0],[-.14,.43,0]],.012,metal,deskLamp);
+cylinder(.055,.105,.11,dark,deskLamp,-.14,.37,0);
+const lampLight=new THREE.PointLight('#ffd6a0',.7,2.5,2);
+lampLight.position.set(.43,1.28,-.2);scene.add(lampLight);
+
+const pc=group();
+box(.76,.04,.51,metal,pc,0,0,0,.017);
+box(.64,.004,.24,dark,pc,0,.023,-.05,.002);
+for(let row=0;row<4;row++)for(let col=0;col<10;col++){
+  box(.046,.004,.034,mat('#68747b',.45),pc,
+    -.277+col*.061,.028,-.13+row*.045,.002);
+}
+box(.19,.002,.105,mat('#949fa5',.34,.6),pc,0,.023,.14,.005);
+const screenHinge=group(pc);screenHinge.position.set(0,.02,-.23);
+screenHinge.rotation.x=-.13;
+box(.77,.48,.025,dark,screenHinge,0,.24,0,.015);
+const screenCanvas=document.createElement('canvas');
+screenCanvas.width=512;screenCanvas.height=320;
+const screenCtx=screenCanvas.getContext('2d');
+const screenTex=new THREE.CanvasTexture(screenCanvas);
+screenTex.colorSpace=THREE.SRGBColorSpace;
+const display=mesh(new THREE.PlaneGeometry(.704,.416),new THREE.MeshStandardMaterial({
+  map:screenTex,color:'#ffffff',emissive:'#ffffff',
+  emissiveMap:screenTex,emissiveIntensity:.65,roughness:.35
+}),screenHinge,0,.247,.015);
+display.castShadow=false;
+
+function updateScreen(t){
+  const c=screenCtx;c.fillStyle='#142129';c.fillRect(0,0,512,320);
+  c.fillStyle='#253943';c.fillRect(0,0,512,28);
+  c.font='12px monospace';c.fillStyle='#aec7bd';c.fillText('a-little-adventure.js',18,19);
+  const done=t>=7;
+  const lines=[
+    'function makeSomethingGood() {',
+    '  const courage = aLittleBit();',
+    '  const cake = prepareSurprise();',
+    '  while (thereIsMoreRoad) {',
+    '    keepGoing(courage, cake);',
+    '  }',
+    '  return "well done";',
+    '}'
+  ];
+  c.font='15px monospace';
+  lines.forEach((line,i)=>{
+    c.fillStyle=['#b2d7b0','#a5cbdb','#e1c28c'][i%3];
+    const count=done?line.length:Math.floor(clamp(t*32-i*28,0,line.length));
+    c.fillText(line.slice(0,count),20,59+i*25);
+  });
+  if(done){
+    c.fillStyle='#213e31';c.fillRect(12,270,488,38);
+    c.fillStyle='#bce8b7';c.font='bold 20px monospace';
+    c.fillText('BUILD COMPLETE!',142,296);
+  }else if(Math.floor(t*4)%2===0){
+    c.fillStyle='#d7e9cd';c.fillRect(22,278,9,17);
+  }
+  screenTex.needsUpdate=true;
+}
+
+// 8bit風キャラクター。低解像度の絵を最近傍補間で表示する。
+const spriteCanvas=document.createElement('canvas');
+spriteCanvas.width=64;spriteCanvas.height=80;
+const sc=spriteCanvas.getContext('2d');
+sc.imageSmoothingEnabled=false;
+const spriteTexture=new THREE.CanvasTexture(spriteCanvas);
+spriteTexture.colorSpace=THREE.SRGBColorSpace;
+spriteTexture.magFilter=THREE.NearestFilter;
+spriteTexture.minFilter=THREE.NearestFilter;
+spriteTexture.generateMipmaps=false;
+
+const spriteMaterial=new THREE.SpriteMaterial({
+  map:spriteTexture,transparent:true,alphaTest:.1,
+  depthWrite:false,toneMapped:false
+});
+const hero=new THREE.Sprite(spriteMaterial);
+hero.center.set(.5,.04);hero.scale.set(1.6,2,1);scene.add(hero);
+
+const palette={
+  outline:'#202835',hair:'#49382f',hairLight:'#715443',
+  skin:'#f1b887',skinLight:'#ffd5a4',shirt:'#4d9baf',
+  shirtLight:'#7bc3ca',shirtDark:'#347080',pants:'#33445b',
+  shoe:'#e7d9ba',red:'#e87468'
+};
+function rect(x,y,w,h,c){
+  sc.fillStyle=c;sc.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));
+}
+function pixelLimb(ax,ay,bx,by,width,color){
+  const dx=bx-ax,dy=by-ay,steps=Math.max(Math.abs(dx),Math.abs(dy),1);
+  for(let i=0;i<=steps;i+=2){
+    const k=i/steps;
+    rect(ax+dx*k-width/2,ay+dy*k-width/2,width,width,palette.outline);
+  }
+  for(let i=0;i<=steps;i+=2){
+    const k=i/steps;
+    rect(ax+dx*k-(width-3)/2,ay+dy*k-(width-3)/2,width-3,width-3,color);
+  }
+}
+function drawShield(x,y,angle){
+  sc.save();sc.translate(Math.round(x),Math.round(y));sc.rotate(angle);
+  const rows=[
+    [-7,-18,14,4],[-11,-14,22,4],[-13,-10,26,20],
+    [-11,10,22,4],[-8,14,16,4],[-4,18,8,4]
+  ];
+  rows.forEach(r=>rect(...r,palette.outline));
+  rect(-9,-10,18,20,'#aec7cd');
+  rect(-7,-14,14,4,'#e3e6d1');
+  rect(-9,10,18,3,'#7d989e');
+  rect(-6,13,12,3,'#aec7cd');
+  rect(-3,16,6,3,'#aec7cd');
+  rect(-6,-8,12,16,'#586d87');
+  rect(-2,-6,4,14,'#f2cc73');
+  rect(-6,-1,12,4,'#f2cc73');
+  rect(-9,-9,2,17,'#f0f1dc');
+  sc.restore();
+}
+function drawHero(t,action,stride){
+  sc.clearRect(0,0,64,80);
+  const running=action==='run'||action==='block';
+  const step=running?Math.sin(stride)*10:0;
+  const bounce=running?Math.abs(Math.sin(stride))*1.2:0;
+  const bodyY=39-bounce;
+  const jump=action==='jump';
+
+  // 背中の盾。炎に遭遇するまでは背負っている。
+  if(action!=='block')drawShield(21,43,-.18);
+
+  pixelLimb(28,56,26+step,71-Math.max(0,step)*.25,9,palette.pants);
+  pixelLimb(36,56,38-step,71-Math.max(0,-step)*.25,9,palette.pants);
+  rect(21+step,69-Math.max(0,step)*.25,12,5,palette.outline);
+  rect(22+step,69-Math.max(0,step)*.25,10,3,palette.shoe);
+  rect(33-step,69-Math.max(0,-step)*.25,12,5,palette.outline);
+  rect(34-step,69-Math.max(0,-step)*.25,10,3,palette.shoe);
+
+  rect(23,bodyY-3,21,23,palette.outline);
+  rect(25,bodyY-2,16,19,palette.shirt);
+  rect(25,bodyY-2,5,17,palette.shirtDark);
+  rect(33,bodyY,8,4,palette.shirtLight);
+  rect(27,bodyY+16,13,3,palette.shirtDark);
+
+  // 顔と髪。
+  rect(23,10,19,4,palette.outline);
+  rect(19,14,28,22,palette.outline);
+  rect(22,17,23,17,palette.skin);
+  rect(25,30,17,7,palette.skin);
+  rect(21,14,22,7,palette.hair);
+  rect(19,20,7,10,palette.hair);
+  rect(24,12,14,4,palette.hair);
+  rect(24,15,12,3,palette.hairLight);
+  rect(43,24,5,6,palette.skinLight);
+  rect(27,24,3,4,palette.outline);
+
+  const happy=action!=='type';
+  if(happy){
+    rect(37,23,6,2,palette.outline);
+    rect(36,25,2,2,palette.outline);
+    rect(42,25,2,2,palette.outline);
+    rect(35,31,7,2,palette.outline);
+    rect(36,33,5,2,'#fff1cf');
+  }else{
+    rect(38,23,3,4,palette.outline);
+    rect(36,32,5,1,palette.outline);
+  }
+  rect(42,29,3,2,palette.red);
+
+  if(action==='type'){
+    const tap=Math.floor(t*17)%2;
+    pixelLimb(39,41,52,44+tap*3,8,palette.shirt);
+    rect(49,42+tap*3,9,5,palette.skinLight);
+    pixelLimb(26,43,44,49-tap*3,7,palette.shirtDark);
+    rect(42,46-tap*3,8,5,palette.skin);
+  }else if(jump){
+    pixelLimb(39,42,48,34,8,palette.shirt);
+    rect(45,31,8,5,palette.skinLight);
+    pixelLimb(25,43,39,37,8,palette.shirtDark);
+  }else if(action==='block'){
+    pixelLimb(39,41,50,28,8,palette.shirt);
+    rect(47,24,7,6,palette.skinLight);
+    pixelLimb(26,45,39,50,8,palette.shirtDark);
+    drawShield(53,26,-.22);
+  }else{
+    pixelLimb(39,42,47,48,8,palette.shirt);
+    rect(44,46,10,5,palette.skinLight);
+    pixelLimb(26,44,38,50,8,palette.shirtDark);
+  }
+  spriteTexture.needsUpdate=true;
+}
+
+// 地面に落ちる主人公の影。
+const shadowTexture=texture((c,s)=>{
+  const g=c.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(0,0,0,.65)');
+  g.addColorStop(.5,'rgba(0,0,0,.25)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  c.fillStyle=g;c.fillRect(0,0,s,s);
+},128);
+const heroShadow=mesh(new THREE.PlaneGeometry(1.3,.70),
+  new THREE.MeshBasicMaterial({map:shadowTexture,transparent:true,depthWrite:false}),
+  scene,0,.036,.1);
+heroShadow.rotation.x=-Math.PI/2;
+heroShadow.castShadow=false;
+
+// リアル寄りのケーキ。
+const cake=group();
+const plate=mat('#e4e8e2',.18,.25);
+const cream=new THREE.MeshPhysicalMaterial({color:'#fff2d5',roughness:.54,clearcoat:.12});
+const sponge=mat('#ddab6e',.89);
+const jam=mat('#ae3940',.34);
+cylinder(.31,.27,.025,plate,cake,0,0,0,48);
+cylinder(.245,.245,.17,sponge,cake,0,.102,0,48);
+cylinder(.249,.249,.025,jam,cake,0,.11,0,48);
+cylinder(.25,.25,.045,cream,cake,0,.196,0,48);
+for(let i=0;i<12;i++){
+  const a=i*TAU/12;
+  ellipsoid(Math.cos(a)*.215,.218,Math.sin(a)*.215,.043,.036,.043,cream,cake);
+}
+for(let i=0;i<5;i++){
+  const a=i*TAU/5,x=Math.cos(a)*.145,z=Math.sin(a)*.145;
+  const berry=ellipsoid(x,.262,z,.046,.068,.042,jam,cake);
+  berry.rotation.z=.12*Math.sin(a);
+  for(let j=0;j<7;j++){
+    const aa=j*2.4;
+    ellipsoid(x+Math.cos(aa)*.041,.24+j*.006,z+Math.sin(aa)*.039,
+      .0025,.005,.0025,mat('#e9c778',.7),cake);
+  }
+}
+cylinder(.011,.011,.14,mat('#89bbca',.45),cake,0,.294,0,12);
+const candle=ellipsoid(0,.397,0,.014,.033,.014,
+  new THREE.MeshBasicMaterial({color:'#ffdda2',toneMapped:false}),cake);
+const cakeLight=new THREE.PointLight('#ffdda0',0,2.5,2);cake.add(cakeLight);
+cakeLight.position.y=.42;
+
+// 魔法の出現粒子。
+const magic=group();
+const magicDots=[];
+for(let i=0;i<32;i++){
+  const dot=mesh(new THREE.OctahedronGeometry(.025),
+    new THREE.MeshBasicMaterial({color:i%2?'#ffe8a6':'#c8fff1',transparent:true}),
+    magic);
+  magicDots.push({dot,a:random()*TAU,r:.3+random()*.65,s:random()});
+}
+
+// ドラゴン：立体の鱗・翼・角を持つ。
+const dragon=group();dragon.position.set(22,0,-.8);
+const scaleTex=texture((c,s)=>{
+  c.fillStyle='#506451';c.fillRect(0,0,s,s);
+  for(let y=0;y<s;y+=20)for(let x=0;x<s;x+=23){
+    const xx=x+(y/20%2)*11.5;
+    c.fillStyle=(x+y)%3?'#64785b':'#435743';
+    c.beginPath();c.ellipse(xx,y,11,15,0,0,TAU);c.fill();
+    c.strokeStyle='#172b2844';c.lineWidth=1;c.stroke();
+  }
+});
+const dragonSkin=mat('#bac19b',.68,0,{
+  map:repeat(scaleTex,2,2),bumpMap:repeat(scaleTex,2,2),bumpScale:.018
+});
+const belly=mat('#b7aa79',.77);
+const horn=mat('#d6c6a5',.48);
+const wingMat=mat('#756452',.85,0,{side:THREE.DoubleSide});
+ellipsoid(.6,1.55,0,1.65,1.15,.82,dragonSkin,dragon);
+ellipsoid(-.32,1.38,.30,.69,.80,.53,belly,dragon);
+tube([[1.65,1.15,0],[2.8,.60,.1],[3.5,.3,.3],[4.1,.6,.7]],.20,dragonSkin,dragon);
+
+const neck=group(dragon);
+tube([[-.5,1.5,0],[-1.0,2.0,0],[-1.27,2.49,0]],.39,dragonSkin,neck);
+const head=group(neck);head.position.set(-1.37,2.48,0);
+ellipsoid(0,0,0,.66,.43,.43,dragonSkin,head);
+ellipsoid(-.54,-.02,.02,.49,.23,.33,dragonSkin,head);
+const jaw=group(head);jaw.position.set(-.12,-.22,0);
+ellipsoid(-.37,-.01,0,.60,.095,.30,belly,jaw);
+const mouth=ellipsoid(-.68,-.13,.035,.32,.095,.275,mat('#391b16',.9),head);
+for(const z of [-.27,.27]){
+  const h=cylinder(.012,.095,.48,horn,head,.22,.47,z,16);
+  h.rotation.z=-.3;
+  ellipsoid(-.19,.12,z*1.5,.12,.083,.038,mat('#d7af43',.25,0,{
+    emissive:'#bb6e12',emissiveIntensity:.25
+  }),head);
+  ellipsoid(-.21,.12,z*1.5+Math.sign(z)*.022,.025,.064,.018,dark,head);
+  for(let i=0;i<4;i++){
+    const tooth=cylinder(.003,.027,.10,horn,head,-.83+i*.14,-.19,z*.78,10);
+    tooth.rotation.z=Math.PI;
+  }
+}
+for(const x of [-.28,1.5])for(const z of [-.58,.58]){
+  const leg=group(dragon);leg.position.set(x,.79,z);
+  ellipsoid(0,0,0,.27,.69,.25,dragonSkin,leg);
+  ellipsoid(-.19,-.58,.04,.43,.16,.28,dragonSkin,leg);
+  for(let i=0;i<3;i++){
+    const claw=cylinder(.004,.035,.17,horn,leg,-.47,-.6,-.12+i*.14,10);
+    claw.rotation.z=Math.PI/2;
+  }
+}
+for(let i=0;i<8;i++){
+  const spike=cylinder(.002,.12,.29,horn,dragon,-.05+i*.34,2.54-i*.065,0,10);
+  spike.rotation.z=-.22;
+}
+
+const wings=[];
+for(const side of [-1,1]){
+  const pivot=group(dragon);pivot.position.set(.5,2.04,side*.48);
+  const shape=new THREE.Shape();
+  shape.moveTo(0,0);shape.lineTo(.30,1.95);
+  shape.lineTo(1.75,2.75);shape.lineTo(2.22,1.42);
+  shape.quadraticCurveTo(1.36,1.66,1.36,.77);
+  shape.quadraticCurveTo(.70,1.02,.58,.20);shape.closePath();
+  const membrane=mesh(new THREE.ShapeGeometry(shape,16),wingMat,pivot);
+  for(const end of [[.3,1.95,0],[1.75,2.75,0],[2.22,1.42,0],[1.36,.77,0]]){
+    tube([[0,0,0],end],.033,dragonSkin,pivot);
+  }
+  pivot.rotation.y=side*.68;
+  wings.push({pivot,side});
+}
+
+// 炎：先端を盾で曲げる軌道。粒子は固定個数を再利用する。
+const fireGeo=new THREE.IcosahedronGeometry(1,1);
+const fireMat=new THREE.MeshBasicMaterial({
+  color:'#ffbd47',transparent:true,opacity:.76,
+  blending:THREE.AdditiveBlending,depthWrite:false,toneMapped:false
+});
+const fire=new THREE.InstancedMesh(fireGeo,fireMat,190);
+fire.frustumCulled=false;scene.add(fire);
+const fireSeeds=Array.from({length:190},()=>({
+  phase:random(),angle:random()*TAU,r:random(),size:.06+random()*.14
+}));
+const flameColors=['#ff5322','#ff8a29','#ffd05f','#fff1af'].map(c=>new THREE.Color(c));
+const fireLight=new THREE.PointLight('#ff923a',0,10,2);
+scene.add(fireLight);
+const mouthWorld=new THREE.Vector3();
+const deflectPoint=new THREE.Vector3();
+const firePoint=new THREE.Vector3();
+
+function updateFire(t,heroX,heroY){
+  const strength=smooth(20.5,21.3,t)*(1-smooth(27.0,28,t));
+  fire.visible=strength>.001;
+  fireLight.intensity=strength*15;
+  if(!fire.visible)return;
+
+  head.updateWorldMatrix(true,false);
+  head.localToWorld(mouthWorld.set(-.96,-.12,.12));
+  const blocking=t>=21 && t<27;
+  deflectPoint.set(heroX+.57,heroY+1.34,.51);
+
+  for(let i=0;i<fireSeeds.length;i++){
+    const s=fireSeeds[i];
+    const age=(s.phase+t*1.12)%1;
+    const hit=blocking && heroX<mouthWorld.x+.2;
+    const split=.58;
+    let spread;
+
+    if(hit && age<split){
+      const k=age/split;
+      firePoint.lerpVectors(mouthWorld,deflectPoint,k);
+      spread=.025+k*.12;
+    }else if(hit){
+      const k=(age-split)/(1-split);
+      const side=i%2?1:-1;
+      firePoint.copy(deflectPoint);
+      firePoint.x-=k*(1.4+s.r);
+      firePoint.y+=k*(side===1?2.1:-.65)+Math.sin(k*Math.PI)*.5;
+      firePoint.z+=side*k*(.7+s.r*.5);
+      spread=.07+k*.16;
+    }else{
+      firePoint.copy(mouthWorld);
+      firePoint.x-=age*5.4;
+      firePoint.y-=age*.7;
+      spread=.04+age*.30;
+    }
+    firePoint.y+=Math.sin(s.angle+t*5)*spread*s.r;
+    firePoint.z+=Math.cos(s.angle+t*4)*spread*s.r;
+    dummy.position.copy(firePoint);
+    dummy.rotation.set(t+i,i*.7,t*.6);
+    const size=s.size*(.6+Math.sin(age*Math.PI)*1.5)*strength;
+    dummy.scale.set(size*1.8,size,size);dummy.updateMatrix();
+    fire.setMatrixAt(i,dummy.matrix);
+    fire.setColorAt(i,flameColors[i%4]);
+  }
+  fire.instanceMatrix.needsUpdate=true;
+  if(fire.instanceColor)fire.instanceColor.needsUpdate=true;
+  fireLight.position.copy(mouthWorld).add(new THREE.Vector3(-1.8,0,.3));
+}
+
+// 盾の衝突点の火花。
+const sparks=[];
+for(let i=0;i<28;i++){
+  const m=mesh(new THREE.OctahedronGeometry(.025),
+    new THREE.MeshBasicMaterial({color:'#ffe7a0',toneMapped:false}),
+    scene);
+  m.castShadow=false;sparks.push(m);
+}
+
+// 前景の岩。
+for(let i=0;i<24;i++){
+  const rock=mesh(new THREE.DodecahedronGeometry(.3+random()*.35,1),
+    stone,scene,-9+random()*53,.15,2.8+random()*3.5);
+  rock.scale.set(1.4,.6,1);rock.rotation.set(random(),random(),random());
+}
+
+const captions=[
+  {at:0,chapter:'01 / あと、ひと押し。',text:'終わりそうで、終わらない。'},
+  {at:4.0,chapter:'01 / あと、ひと押し。',text:'……あと、一行。'},
+  {at:7,chapter:'02 / できた！',text:'できた！'},
+  {at:10.3,chapter:'03 / ごほうびは突然に。',text:'おや。これは、もしかして。'},
+  {at:13.3,chapter:'04 / 冷めないうちに。',text:'うれしいことは、誰かに届けたくなる。'},
+  {at:20.6,chapter:'05 / 道の途中には。',text:'……ちょっとだけ、熱いお出迎え。'},
+  {at:23,chapter:'05 / 道の途中には。',text:'ケーキは焼けてますので！'},
+  {at:28,chapter:'06 / そのまま、前へ。',text:'寄り道は、また今度。'},
+  {at:32,chapter:'06 / そのまま、前へ。',text:''}
+];
+
+let heroX=-.66,heroY=0;
+const cameraTarget=new THREE.Vector3();
+const cameraDesired=new THREE.Vector3();
+const cameraLook=new THREE.Vector3();
+
+function poseAt(t){
+  let x=-.66,y=0,action='type';
+  if(t>=7 && t<10.3){
+    action='jump';
+    const a=clamp((t-7)/3.3,0,1);
+    y=Math.abs(Math.sin(a*Math.PI*2))*.66*(1-a*.15);
+  }else if(t>=10.3 && t<13.3){
+    action='happy';
+    x=lerp(-.66,-.3,smooth(11.9,13.3,t));
+  }else if(t>=13.3){
+    action=t>=21 && t<27?'block':'run';
+    if(t<21)x=lerp(-.3,15.1,(t-13.3)/7.7);
+    else if(t<27)x=lerp(15.1,24.5,(t-21)/6);
+    else x=lerp(24.5,40,(t-27)/8);
+    y=Math.abs(Math.sin((t-13.3)*12))*.035;
+  }
+  return {x,y,action};
+}
+
+function updateScene(t,dt,instant=false){
+  const p=poseAt(t);heroX=p.x;heroY=p.y;
+  const stride=(t-13.3)*12;
+  hero.position.set(p.x,p.y,.30);
+  drawHero(t,p.action,stride);
+  heroShadow.position.x=p.x;
+  heroShadow.material.opacity=1-p.y*.60;
+  heroShadow.scale.setScalar(1+p.y*.35);
+
+  // カタカタ：PC本体とキャラの手が連動して震える。
+  const typing=t<7;
+  const shake=typing?Math.sin(t*91)*.004:0;
+  const deskPC=new THREE.Vector3(.40,1.014,-.06);
+  const heldPC=new THREE.Vector3(p.x+.57,p.y+1.12,.72);
+
+  if(t<7){
+    pc.position.copy(deskPC);
+  }else if(t<7.35){
+    pc.position.lerpVectors(deskPC,heldPC,smooth(7,7.35,t));
+  }else if(t<9.5){
+    pc.position.copy(heldPC);
+  }else if(t<10.3){
+    pc.position.lerpVectors(heldPC,deskPC,smooth(9.5,10.3,t));
+  }else{
+    pc.position.copy(deskPC);
+  }
+  pc.position.y+=shake;
+  pc.rotation.set(0,.10,typing?Math.sin(t*76)*.006:
+    t>7.35&&t<9.5?Math.sin(t*7)*.08:0);
+  updateScreen(t);
+
+  // ケーキは机の横の空間に現れ、両手の前へ収まる。
+  cake.visible=t>=10.3;
+  const reveal=smooth(10.3,11.2,t);
+  if(cake.visible){
+    const pickup=smooth(11.5,13,t);
+    const spawn=new THREE.Vector3(-.05,1.49,.72);
+    const hold=new THREE.Vector3(p.x+.38,p.y+.90,.88);
+    cake.position.lerpVectors(spawn,hold,pickup);
+    if(t>13.3){
+      cake.position.y+=Math.sin(stride+.4)*.025+Math.sin(t*3.7)*.009;
+    }
+    cake.scale.setScalar(reveal);
+    cake.rotation.set(0,.12,p.action==='block'?-.06:Math.sin(t*3)*.014);
+    candle.scale.y=.85+Math.sin(t*16)*.11;
+    cakeLight.intensity=.20*reveal;
+  }else cakeLight.intensity=0;
+
+  magic.visible=t>=10.3 && t<13.1;
+  magic.position.set(-.05,1.5,.72);
+  const magicAge=t-10.3;
+  for(const {dot,a,r,s} of magicDots){
+    dot.position.set(
+      Math.cos(a+magicAge*.6)*r*(.35+magicAge*.3),
+      Math.sin(a*2+magicAge)*.35+magicAge*.14,
+      Math.sin(a+magicAge*.6)*r
+    );
+    dot.scale.setScalar(.6+Math.sin(s*7+magicAge*5)*.3);
+    dot.material.opacity=clamp(1-magicAge/2.8,0,1);
+  }
+
+  dragon.position.y=Math.sin(t*1.5)*.025;
+  neck.rotation.z=Math.sin(t*.85)*.035;
+  jaw.rotation.z=-(.02+smooth(20.2,21,t)*.19*(1-smooth(27,29,t)));
+  wings.forEach(({pivot,side})=>{
+    pivot.rotation.x=side*(.28+Math.sin(t*1.3)*.07);
+    pivot.rotation.z=Math.sin(t*.9+side)*.04;
+  });
+  updateFire(t,p.x,p.y);
+
+  const blocking=p.action==='block' && p.x<21;
+  for(let i=0;i<sparks.length;i++){
+    const m=sparks[i];m.visible=blocking;
+    if(!blocking)continue;
+    const age=(t*2.8+i*.137)%1;
+    const a=i*2.4;
+    m.position.set(
+      p.x+.57-age*(.2+Math.abs(Math.sin(a))*.75),
+      p.y+1.35+Math.sin(a)*age*.9-age*age*.3,
+      .57+Math.cos(a)*age*.6
+    );
+    m.scale.setScalar((1-age)*(.5+Math.sin(i)*.2));
+  }
+
+  // 撮影：作業中は近く、走り始めたら引き、ドラゴンを画角に入れる。
+  const running=smooth(12.2,15,t);
+  const encounter=smooth(18.5,21,t)*(1-smooth(27,29,t));
+  const lead=lerp(.6,2.1,running)+encounter*.55;
+  cameraTarget.set(p.x+lead,1.65+encounter*.35,0);
+  const portrait=clamp(1.25/(innerWidth/innerHeight),1,1.65);
+  cameraDesired.set(
+    p.x+lead+.9,
+    3.4+running*.65+encounter*.45,
+    (9.7+running*1.3+encounter*1.8)*portrait
+  );
+  if(instant){
+    camera.position.copy(cameraDesired);cameraLook.copy(cameraTarget);
+  }else{
+    const f=1-Math.exp(-dt*3.4);
+    camera.position.lerp(cameraDesired,f);
+    cameraLook.lerp(cameraTarget,f);
+  }
+  camera.lookAt(cameraLook);
+  sun.position.set(p.x-7,15,9);
+  sun.target.position.set(p.x+1,0,0);
+  sun.target.updateMatrixWorld();
+
+  let caption=captions[0];
+  for(const entry of captions)if(t>=entry.at)caption=entry;
+  $('#chapter').textContent=caption.chapter;
+  $('#subtitle').textContent=caption.text;
+  $('#progress').style.width=`${t/DURATION*100}%`;
+  $('#timer').textContent=`${String(Math.floor(t)).padStart(2,'0')} / 35`;
+}
+
+function reset(){
+  elapsed=0;paused=false;finished=false;
+  $('#ending').style.display='none';
+  $('#pause').textContent='一時停止';
+  updateScene(0,0,true);
+}
+$('#replay').onclick=reset;
+$('#pause').onclick=()=>{
+  if(finished){reset();return;}
+  paused=!paused;
+  $('#pause').textContent=paused?'再生':'一時停止';
+};
+addEventListener('keydown',e=>{
+  if(e.code==='Space' && e.target.tagName!=='BUTTON'){
+    e.preventDefault();$('#pause').click();
+  }
+});
+addEventListener('resize',()=>{
+  renderer.setSize(innerWidth,innerHeight);
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  updateScene(elapsed,0,true);
+});
+
+const clock=new THREE.Clock();
+reset();
+renderer.render(scene,camera);
+$('#loading').style.display='none';
+
+function frame(){
+  requestAnimationFrame(frame);
+  const dt=Math.min(clock.getDelta(),.05);
+  if(!paused && !finished){
+    elapsed=Math.min(DURATION,elapsed+dt);
+    updateScene(elapsed,dt);
+    if(elapsed>=DURATION){
+      finished=true;
+      $('#ending').style.display='grid';
+      $('#pause').textContent='もう一度';
+    }
+  }
+  renderer.render(scene,camera);
+}
+frame();
+</script>
+</body>
+</html>
+```
