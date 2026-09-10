@@ -106,7 +106,7 @@ button:hover{background:#ffffff24}
   <button id="pause">一時停止</button>
   <button id="replay">最初から</button>
   <div id="track"><div id="progress"></div></div>
-  <span id="timer">00 / 35</span>
+  <span id="timer">00 / 56</span>
 </div>
 
 <script type="module">
@@ -119,7 +119,7 @@ const clamp=THREE.MathUtils.clamp;
 const lerp=THREE.MathUtils.lerp;
 const smooth=(a,b,x)=>THREE.MathUtils.smoothstep(x,a,b);
 const TAU=Math.PI*2;
-const DURATION=35;
+const DURATION=56;
 let elapsed=0,paused=false,finished=false;
 let seed=1927;
 function random(){
@@ -303,6 +303,19 @@ for(const x of [-.69,.69])for(const z of [-.38,.38]){
   box(.075,.91,.075,wood,desk,x,.455,z);
 }
 box(1.45,.09,.055,wood,desk,0,.44,-.38);
+
+// 作業中はこの低い台に乗る。
+// 机の手前に配置し、胴体と天板が重ならないようにする。
+const workPlatform=group();
+workPlatform.position.set(-.66,0,.98);
+box(.64,.07,.58,wood,workPlatform,0,.245,0);
+for(const x of [-.24,.24]){
+  for(const z of [-.20,.20]){
+    box(.065,.21,.065,wood,workPlatform,x,.105,z);
+  }
+}
+box(.51,.045,.045,wood,workPlatform,0,.10,-.20);
+
 const deskLamp=group(desk);deskLamp.position.set(.58,.99,-.22);
 cylinder(.10,.12,.03,dark,deskLamp);
 tube([[0,0,0],[0,.34,0],[-.14,.43,0]],.012,metal,deskLamp);
@@ -421,7 +434,7 @@ function drawShield(x,y,angle){
 }
 function drawHero(t,action,stride){
   sc.clearRect(0,0,64,80);
-  const running=action==='run'||action==='block';
+  const running=action==='run'||action==='block'||action==='throw';
   const step=running?Math.sin(stride)*10:0;
   const bounce=running?Math.abs(Math.sin(stride))*1.2:0;
   const bodyY=39-bounce;
@@ -478,6 +491,22 @@ function drawHero(t,action,stride){
     pixelLimb(39,42,48,34,8,palette.shirt);
     rect(45,31,8,5,palette.skinLight);
     pixelLimb(25,43,39,37,8,palette.shirtDark);
+  }else if(action==='throw'){
+    const throwProgress=smooth(44,45,t);
+    pixelLimb(
+      39,41,
+      lerp(37,58,throwProgress),
+      lerp(18,32,throwProgress),
+      8,palette.shirt
+    );
+    rect(
+      lerp(34,55,throwProgress),
+      lerp(15,29,throwProgress),
+      7,5,palette.skinLight
+    );
+    // もう片方の手はケーキを支えたまま。
+    pixelLimb(26,45,42,50,8,palette.shirtDark);
+    rect(40,48,8,5,palette.skin);
   }else if(action==='block'){
     pixelLimb(39,41,50,28,8,palette.shirt);
     rect(47,24,7,6,palette.skinLight);
@@ -634,7 +663,7 @@ const mouthWorld=new THREE.Vector3();
 const deflectPoint=new THREE.Vector3();
 const firePoint=new THREE.Vector3();
 
-function updateFire(t,heroX,heroY){
+function updateFire(t,heroX,heroY,heroZ){
   const strength=smooth(20.5,21.3,t)*(1-smooth(27.0,28,t));
   fire.visible=strength>.001;
   fireLight.intensity=strength*15;
@@ -643,7 +672,7 @@ function updateFire(t,heroX,heroY){
   head.updateWorldMatrix(true,false);
   head.localToWorld(mouthWorld.set(-.96,-.12,.12));
   const blocking=t>=21 && t<27;
-  deflectPoint.set(heroX+.57,heroY+1.34,.51);
+  deflectPoint.set(heroX+.57,heroY+1.34,heroZ+.30);
 
   for(let i=0;i<fireSeeds.length;i++){
     const s=fireSeeds[i];
@@ -693,6 +722,427 @@ for(let i=0;i<28;i++){
   m.castShadow=false;sparks.push(m);
 }
 
+// ------------------------------------------------------------
+// 続き：金属棒、サンダーバード、雷
+// ------------------------------------------------------------
+
+// 地面の金属棒。薄い擦り傷と強いハイライトを持たせる。
+const rodSurface=texture((c,s)=>{
+  c.fillStyle='#c6c9cc';
+  c.fillRect(0,0,s,s);
+  for(let i=0;i<1600;i++){
+    const y=random()*s;
+    c.strokeStyle=random()>.5?'#ffffff19':'#303c4717';
+    c.lineWidth=.4+random()*.7;
+    c.beginPath();
+    c.moveTo(0,y);
+    c.lineTo(s,y+(random()-.5)*1.7);
+    c.stroke();
+  }
+});
+const rodMetal=new THREE.MeshPhysicalMaterial({
+  color:'#d7e0e5',
+  metalness:.96,
+  roughness:.21,
+  map:rodSurface,
+  clearcoat:.35,
+  clearcoatRoughness:.13,
+  envMapIntensity:1.5
+});
+const rod=group();
+cylinder(.024,.024,1.22,rodMetal,rod,0,0,0,24);
+for(const y of [-.59,.59]){
+  cylinder(.030,.030,.035,metal,rod,0,y,0,24);
+}
+const rodGround=new THREE.Vector3(36.85,.075,2.10);
+const rodLanding=new THREE.Vector3(57,.10,-.55);
+const rodRelease=new THREE.Vector3(50.1,1.52,2.8);
+rod.position.copy(rodGround);
+rod.rotation.z=-Math.PI/2+.12;
+
+// 拾う前の控えめな反射。遠くから点滅するマーカーにはしない。
+const rodGlint=mesh(
+  new THREE.PlaneGeometry(.13,.13),
+  new THREE.MeshBasicMaterial({
+    color:'#eaf8ff',transparent:true,opacity:0,
+    side:THREE.DoubleSide,depthWrite:false
+  }),
+  rod,0,.35,.027
+);
+rodGlint.castShadow=false;
+
+// サンダーバード。
+const thunderbird=group();
+thunderbird.visible=false;
+
+const birdFeather=mat('#354b67',.43,.18);
+const birdFeatherLight=mat('#668ba1',.40,.20);
+const birdGold=mat('#d5b46c',.31,.63);
+const birdDark=mat('#15273b',.58);
+const birdEye=new THREE.MeshStandardMaterial({
+  color:'#c2eeff',emissive:'#6bd6ff',emissiveIntensity:2.2,
+  roughness:.21
+});
+
+ellipsoid(0,0,0,.78,.40,.47,birdFeather,thunderbird);
+ellipsoid(-.59,.16,0,.37,.32,.29,birdFeatherLight,thunderbird);
+ellipsoid(-.82,.11,.04,.24,.13,.18,birdGold,thunderbird);
+
+const beakTip=mesh(
+  new THREE.ConeGeometry(.11,.27,12),
+  birdGold,thunderbird,-1.02,.08,.04
+);
+beakTip.rotation.z=Math.PI/2;
+
+for(const side of [-1,1]){
+  ellipsoid(-.72,.27,side*.25,.075,.055,.025,birdEye,thunderbird);
+  for(let i=0;i<3;i++){
+    const crest=mesh(
+      new THREE.ConeGeometry(.055,.40-i*.06,10),
+      birdGold,thunderbird,-.39+i*.105,.48+i*.015,side*.06
+    );
+    crest.rotation.z=-.42;
+  }
+}
+
+// 尾羽。
+for(let i=0;i<7;i++){
+  const tail=box(
+    .90+Math.abs(i-3)*.05,.035,.10,
+    i%2?birdFeatherLight:birdFeather,
+    thunderbird,1.01,-.035,(i-3)*.09,.015
+  );
+  tail.rotation.y=(i-3)*.075;
+  tail.rotation.z=-.12;
+}
+
+// 各翼は、肩・羽膜・独立した長い風切羽からなる。
+const birdWings=[];
+for(const side of [-1,1]){
+  const wing=group(thunderbird);
+  wing.position.set(.02,.08,side*.26);
+
+  const shape=new THREE.Shape();
+  shape.moveTo(-.31,0);
+  shape.lineTo(-.40,1.18);
+  shape.lineTo(-.02,2.50);
+  shape.lineTo(.70,2.10);
+  shape.lineTo(.88,.95);
+  shape.lineTo(.48,.04);
+  shape.closePath();
+
+  const membrane=mesh(
+    new THREE.ShapeGeometry(shape,12),
+    new THREE.MeshStandardMaterial({
+      color:'#476880',roughness:.56,metalness:.12,
+      side:THREE.DoubleSide
+    }),
+    wing
+  );
+  membrane.rotation.x=side*Math.PI/2;
+
+  for(let i=0;i<11;i++){
+    const u=i/10;
+    const feather=box(
+      .20,.045,.87-u*.20,
+      i%3===0?birdGold:i%2?birdFeatherLight:birdFeather,
+      wing,
+      -.19+u*.87,
+      -.005,
+      side*(1.15+Math.sin(u*Math.PI)*.57),
+      .02
+    );
+    feather.rotation.y=side*(-.45+u*.9);
+  }
+
+  tube([
+    [-.25,0,0],
+    [-.34,.01,side*1.05],
+    [-.02,.01,side*2.43]
+  ],.027,birdGold,wing);
+
+  birdWings.push({wing,side});
+}
+
+// 足を小さく畳んだ飛行姿勢。
+for(const z of [-.2,.2]){
+  tube([[.18,-.25,z],[.32,-.50,z],[.01,-.55,z]],.035,birdGold,thunderbird);
+}
+
+// サンダーバード周辺の暗雲。
+// 完全な空の切り替えではなく、背後に立体的な雲が集まる。
+const storm=group();
+storm.visible=false;
+const stormMaterial=new THREE.MeshStandardMaterial({
+  color:'#697b8b',roughness:1,
+  transparent:true,opacity:.56,depthWrite:false
+});
+for(let i=0;i<13;i++){
+  const cloud=ellipsoid(
+    (random()-.5)*8,
+    (random()-.5)*.8,
+    (random()-.5)*3,
+    1+random()*1.5,
+    .40+random()*.45,
+    .8+random(),
+    stormMaterial,storm
+  );
+  cloud.castShadow=false;
+}
+
+// 雷は固定個数の線分を更新する。
+// 主幹と枝を重ね、根元は必ず金属棒に集まる。
+const boltRoot=group();
+boltRoot.visible=false;
+const boltLayers=[];
+const BOLT_POINTS=29;
+for(let layer=0;layer<3;layer++){
+  const positions=new Float32Array(BOLT_POINTS*3);
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
+
+  const material=new THREE.LineBasicMaterial({
+    color:layer===0?'#f2fdff':layer===1?'#b2dcff':'#719eff',
+    transparent:true,
+    opacity:1,
+    blending:THREE.AdditiveBlending,
+    depthWrite:false,
+    toneMapped:false
+  });
+  const line=new THREE.Line(geometry,material);
+  line.frustumCulled=false;
+  boltRoot.add(line);
+  boltLayers.push({line,positions,layer});
+}
+
+const boltBranches=[];
+for(let i=0;i<7;i++){
+  const positions=new Float32Array(7*3);
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
+  const line=new THREE.Line(geometry,new THREE.LineBasicMaterial({
+    color:'#a6d9ff',
+    transparent:true,opacity:.7,
+    blending:THREE.AdditiveBlending,
+    depthWrite:false,toneMapped:false
+  }));
+  line.frustumCulled=false;
+  boltRoot.add(line);
+  boltBranches.push({line,positions});
+}
+
+const thunderLight=new THREE.PointLight('#aadfff',0,18,2);
+scene.add(thunderLight);
+const birdGlow=new THREE.PointLight('#79cfff',0,7,2);
+scene.add(birdGlow);
+
+const impactRing=mesh(
+  new THREE.RingGeometry(.88,1,64),
+  new THREE.MeshBasicMaterial({
+    color:'#bfeeff',transparent:true,opacity:0,
+    side:THREE.DoubleSide,depthWrite:false,
+    blending:THREE.AdditiveBlending,toneMapped:false
+  }),
+  scene
+);
+impactRing.rotation.x=-Math.PI/2;
+impactRing.castShadow=false;
+impactRing.visible=false;
+
+const electricSparks=[];
+for(let i=0;i<42;i++){
+  const spark=mesh(
+    new THREE.OctahedronGeometry(.026),
+    new THREE.MeshBasicMaterial({
+      color:i%2?'#d9faff':'#8cc9ff',toneMapped:false
+    }),
+    scene
+  );
+  spark.castShadow=false;
+  spark.visible=false;
+  electricSparks.push(spark);
+}
+
+const lightningSource=new THREE.Vector3();
+const lightningTarget=new THREE.Vector3();
+const pickupPosition=new THREE.Vector3();
+const boltTemp=new THREE.Vector3();
+
+function updateThunderSequence(t,p){
+  const pickup=smooth(33.35,34.45,t);
+  const hasRod=t>=34.45 && t<44.45;
+  const throwing=t>=44.45 && t<45.70;
+  const onGround=t>=45.70;
+
+  rod.visible=true;
+  if(t<33.35){
+    rod.position.copy(rodGround);
+    rod.rotation.set(0,.10,-Math.PI/2+.12);
+  }else if(t<34.45){
+    pickupPosition.set(p.x+.49,p.y+1.15,p.z+.35);
+    rod.position.lerpVectors(rodGround,pickupPosition,pickup);
+    rod.position.y+=Math.sin(pickup*Math.PI)*.24;
+    rod.rotation.set(
+      0,.10,
+      lerp(-Math.PI/2+.12,-.34,pickup)
+    );
+  }else if(hasRod){
+    const gait=(t-35)*11.2;
+    rod.position.set(
+      p.x+.49,
+      p.y+1.15+Math.sin(gait)*.021,
+      p.z+.35
+    );
+    rod.rotation.set(
+      .09,
+      .1+Math.sin(t*2)*.025,
+      -.34+Math.sin(gait*.5)*.035
+    );
+
+    if(t>=44){
+      const drawBack=smooth(44,44.45,t);
+      rod.position.x-=drawBack*.16;
+      rod.position.y+=drawBack*.39;
+      rod.rotation.z=lerp(-.34,-.91,drawBack);
+    }
+  }else if(throwing){
+    const flight=(t-44.45)/(45.70-44.45);
+    rod.position.lerpVectors(rodRelease,rodLanding,flight);
+    rod.position.y+=Math.sin(flight*Math.PI)*1.7;
+    rod.rotation.set(
+      .1+flight*.3,
+      .2,
+      -.91-flight*Math.PI*3.5
+    );
+  }else if(onGround){
+    const settle=smooth(45.70,45.95,t);
+    rod.position.copy(rodLanding);
+    rod.position.y+=Math.sin(settle*Math.PI)*.12;
+    rod.rotation.set(0,.28,-Math.PI/2+.06);
+  }
+
+  rodGlint.material.opacity=t>=31.5 && t<33.4
+    ? Math.pow(Math.max(0,Math.sin((t-31.5)*2.2)),8)*.80
+    :0;
+
+  const arrival=smooth(39.5,43,t);
+  const departure=smooth(50,56,t);
+  thunderbird.visible=t>=39.5;
+  storm.visible=t>=39.5;
+
+  if(thunderbird.visible){
+    thunderbird.position.set(
+      lerp(67,56.5,arrival)+departure*9,
+      lerp(8.2,5.2,arrival)+Math.sin(t*2)*.17+departure*3,
+      -1.35
+    );
+    thunderbird.rotation.set(
+      Math.sin(t*1.6)*.045,
+      -.10+departure*.6,
+      Math.sin(t*.8)*.035
+    );
+    for(const {wing,side} of birdWings){
+      wing.rotation.x=side*(Math.sin(t*4.7)*.40+.10);
+      wing.rotation.z=Math.sin(t*4.7+.7)*.05;
+    }
+  }
+
+  storm.position.set(56.7,7.5,-5.0);
+  storm.scale.setScalar(.68+arrival*.32);
+  stormMaterial.opacity=arrival*(1-departure*.7)*.56;
+
+  // 劇的な明滅ではなく、雲で少し暗くなる程度の連続変化。
+  const cloudShade=arrival*(1-smooth(50,54,t));
+  sun.intensity=3.1-cloudShade*.82;
+
+  birdGlow.position.copy(thunderbird.position);
+  birdGlow.intensity=arrival*(1-departure)*2.4;
+
+  // 予兆の後に、棒へ向かう一本の放電。
+  // 全画面の白フラッシュは使わない。
+  const strike=
+    smooth(46,46.28,t)*(1-smooth(48.30,49.15,t));
+  boltRoot.visible=strike>.001;
+  impactRing.visible=strike>.001;
+  thunderLight.intensity=strike*(17+Math.sin(t*23)*2);
+  thunderLight.position.set(57,1.1,-.55);
+
+  if(boltRoot.visible){
+    lightningSource.set(
+      thunderbird.position.x-.34,
+      thunderbird.position.y-.43,
+      thunderbird.position.z+.08
+    );
+    lightningTarget.copy(rodLanding);
+    lightningTarget.y=.15;
+    const shapeTime=t*18;
+
+    for(const {line,positions,layer} of boltLayers){
+      for(let i=0;i<BOLT_POINTS;i++){
+        const k=i/(BOLT_POINTS-1);
+        const envelope=Math.sin(k*Math.PI);
+        boltTemp.lerpVectors(lightningSource,lightningTarget,k);
+        boltTemp.x+=(
+          Math.sin(i*2.73+shapeTime)+
+          Math.sin(i*5.13-shapeTime*.71)*.47
+        )*.21*envelope;
+        boltTemp.z+=Math.cos(i*3.97+shapeTime*.83)*.20*envelope;
+
+        // 外側の青い線をわずかにずらして重ねる。
+        boltTemp.x+=layer*.011*envelope;
+        boltTemp.z-=layer*.009*envelope;
+        positions[i*3]=boltTemp.x;
+        positions[i*3+1]=boltTemp.y;
+        positions[i*3+2]=boltTemp.z;
+      }
+      line.geometry.attributes.position.needsUpdate=true;
+      line.material.opacity=strike*(layer===0?1:.62);
+    }
+
+    for(let i=0;i<boltBranches.length;i++){
+      const branch=boltBranches[i];
+      const sourceIndex=5+i*3;
+      const sourcePositions=boltLayers[0].positions;
+      const start=new THREE.Vector3(
+        sourcePositions[sourceIndex*3],
+        sourcePositions[sourceIndex*3+1],
+        sourcePositions[sourceIndex*3+2]
+      );
+      for(let j=0;j<7;j++){
+        const k=j/6;
+        const side=i%2?1:-1;
+        branch.positions[j*3]=start.x+
+          side*k*(.35+(i%3)*.13)+
+          Math.sin(j*3.1+shapeTime)*.06*k;
+        branch.positions[j*3+1]=start.y-k*.47;
+        branch.positions[j*3+2]=start.z+
+          Math.sin(i*2.3)*k*.46;
+      }
+      branch.line.geometry.attributes.position.needsUpdate=true;
+      branch.line.material.opacity=strike*.55;
+    }
+
+    const ringAge=(t-46)/3.15;
+    impactRing.position.set(rodLanding.x,.052,rodLanding.z);
+    impactRing.scale.setScalar(.14+ringAge*1.8);
+    impactRing.material.opacity=strike*.30*(1-ringAge*.6);
+  }
+
+  for(let i=0;i<electricSparks.length;i++){
+    const spark=electricSparks[i];
+    spark.visible=strike>.001;
+    if(!spark.visible)continue;
+    const life=(t*1.4+i*.071)%1;
+    const angle=i*2.399;
+    spark.position.set(
+      rodLanding.x+Math.cos(angle)*life*1.55,
+      .16+Math.sin(life*Math.PI)*(.28+(i%5)*.12),
+      rodLanding.z+Math.sin(angle)*life*1.15
+    );
+    spark.scale.setScalar((1-life)*strike*(.65+(i%3)*.25));
+  }
+}
+
 // 前景の岩。
 for(let i=0;i<24;i++){
   const rock=mesh(new THREE.DodecahedronGeometry(.3+random()*.35,1),
@@ -709,39 +1159,81 @@ const captions=[
   {at:20.6,chapter:'05 / 道の途中には。',text:'……ちょっとだけ、熱いお出迎え。'},
   {at:23,chapter:'05 / 道の途中には。',text:'ケーキは焼けてますので！'},
   {at:28,chapter:'06 / そのまま、前へ。',text:'寄り道は、また今度。'},
-  {at:32,chapter:'06 / そのまま、前へ。',text:''}
+  {at:32.3,chapter:'07 / 道端のひかり。',text:'何かに、使えるかもしれない。'},
+  {at:35,chapter:'07 / 道端のひかり。',text:'ケーキと、盾と、一本の棒。'},
+  {at:40,chapter:'08 / 空からの来客。',text:'今度は、空模様が怪しい。'},
+  {at:43.4,chapter:'08 / 空からの来客。',text:'ひらめいた。'},
+  {at:45.7,chapter:'09 / 雷の行き先。',text:'こちらではなく、あちらへどうぞ。'},
+  {at:49.4,chapter:'10 / まだまだ、前へ。',text:'急ごう。ろうそくが短くなる前に。'},
+  {at:53.4,chapter:'10 / まだまだ、前へ。',text:''}
 ];
 
-let heroX=-.66,heroY=0;
+let heroX=-.66,heroY=0,heroZ=.98;
 const cameraTarget=new THREE.Vector3();
 const cameraDesired=new THREE.Vector3();
 const cameraLook=new THREE.Vector3();
 
 function poseAt(t){
-  let x=-.66,y=0,action='type';
+  let x=-.66,y=.28,z=.98,action='type';
+
   if(t>=7 && t<10.3){
     action='jump';
     const a=clamp((t-7)/3.3,0,1);
-    y=Math.abs(Math.sin(a*Math.PI*2))*.66*(1-a*.15);
+    // 最初だけ台から踏み出し、その後は従来のジャンプ高さ。
+    const stepOff=.28*(1-smooth(7,7.38,t));
+    y=Math.abs(Math.sin(a*Math.PI*2))*.66*(1-a*.15)+stepOff;
+    z=lerp(.98,1.20,smooth(7,7.55,t));
   }else if(t>=10.3 && t<13.3){
     action='happy';
     x=lerp(-.66,-.3,smooth(11.9,13.3,t));
+    y=0;
+    // 走り出す前に、机より手前の通路へ出る。
+    z=lerp(1.20,1.88,smooth(11.9,13.3,t));
   }else if(t>=13.3){
     action=t>=21 && t<27?'block':'run';
-    if(t<21)x=lerp(-.3,15.1,(t-13.3)/7.7);
-    else if(t<27)x=lerp(15.1,24.5,(t-21)/6);
-    else x=lerp(24.5,40,(t-27)/8);
-    y=Math.abs(Math.sin((t-13.3)*12))*.035;
+
+    if(t<21){
+      x=lerp(-.3,15.1,(t-13.3)/7.7);
+    }else if(t<27){
+      x=lerp(15.1,24.5,(t-21)/6);
+    }else if(t<33){
+      x=lerp(24.5,36,(t-27)/6);
+    }else if(t<35){
+      x=36;
+      action='happy';
+    }else if(t<43){
+      x=lerp(36,48,(t-35)/8);
+    }else if(t<45){
+      x=lerp(48,51,(t-43)/2);
+      action=t>=44?'throw':'run';
+    }else if(t<49){
+      x=lerp(51,54,(t-45)/4);
+    }else{
+      x=lerp(54,68,(t-49)/7);
+    }
+
+    // ドラゴンの胴体・脚・翼より手前へ、大きく弧を描いて回避。
+    const dragonAvoid=
+      smooth(16,20,t)*(1-smooth(28,31,t));
+    z=1.88+dragonAvoid*1.15;
+
+    // 雷の落ちる棒から距離を取り、手前側を走り抜ける。
+    z+=smooth(40,44,t)*(1-smooth(50,54,t))*.62;
+
+    const isMoving=action!=='happy';
+    y=isMoving?Math.abs(Math.sin((t-13.3)*12))*.035:0;
   }
-  return {x,y,action};
+  return {x,y,z,action};
 }
 
 function updateScene(t,dt,instant=false){
-  const p=poseAt(t);heroX=p.x;heroY=p.y;
+  const p=poseAt(t);heroX=p.x;heroY=p.y;heroZ=p.z;
   const stride=(t-13.3)*12;
-  hero.position.set(p.x,p.y,.30);
+  hero.position.set(p.x,p.y,p.z);
   drawHero(t,p.action,stride);
   heroShadow.position.x=p.x;
+  heroShadow.position.z=p.z;
+  heroShadow.visible=t>=7;
   heroShadow.material.opacity=1-p.y*.60;
   heroShadow.scale.setScalar(1+p.y*.35);
 
@@ -749,7 +1241,7 @@ function updateScene(t,dt,instant=false){
   const typing=t<7;
   const shake=typing?Math.sin(t*91)*.004:0;
   const deskPC=new THREE.Vector3(.40,1.014,-.06);
-  const heldPC=new THREE.Vector3(p.x+.57,p.y+1.12,.72);
+  const heldPC=new THREE.Vector3(p.x+.57,p.y+1.12,p.z+.37);
 
   if(t<7){
     pc.position.copy(deskPC);
@@ -772,8 +1264,8 @@ function updateScene(t,dt,instant=false){
   const reveal=smooth(10.3,11.2,t);
   if(cake.visible){
     const pickup=smooth(11.5,13,t);
-    const spawn=new THREE.Vector3(-.05,1.49,.72);
-    const hold=new THREE.Vector3(p.x+.38,p.y+.90,.88);
+    const spawn=new THREE.Vector3(-.05,1.49,1.65);
+    const hold=new THREE.Vector3(p.x+.38,p.y+.90,p.z+.58);
     cake.position.lerpVectors(spawn,hold,pickup);
     if(t>13.3){
       cake.position.y+=Math.sin(stride+.4)*.025+Math.sin(t*3.7)*.009;
@@ -785,7 +1277,7 @@ function updateScene(t,dt,instant=false){
   }else cakeLight.intensity=0;
 
   magic.visible=t>=10.3 && t<13.1;
-  magic.position.set(-.05,1.5,.72);
+  magic.position.set(-.05,1.5,1.65);
   const magicAge=t-10.3;
   for(const {dot,a,r,s} of magicDots){
     dot.position.set(
@@ -804,7 +1296,7 @@ function updateScene(t,dt,instant=false){
     pivot.rotation.x=side*(.28+Math.sin(t*1.3)*.07);
     pivot.rotation.z=Math.sin(t*.9+side)*.04;
   });
-  updateFire(t,p.x,p.y);
+  updateFire(t,p.x,p.y,p.z);
 
   const blocking=p.action==='block' && p.x<21;
   for(let i=0;i<sparks.length;i++){
@@ -815,21 +1307,31 @@ function updateScene(t,dt,instant=false){
     m.position.set(
       p.x+.57-age*(.2+Math.abs(Math.sin(a))*.75),
       p.y+1.35+Math.sin(a)*age*.9-age*age*.3,
-      .57+Math.cos(a)*age*.6
+      p.z+.35+Math.cos(a)*age*.6
     );
     m.scale.setScalar((1-age)*(.5+Math.sin(i)*.2));
   }
 
-  // 撮影：作業中は近く、走り始めたら引き、ドラゴンを画角に入れる。
+  updateThunderSequence(t,p);
+
+  // 作業中は近く、遭遇時は主人公と相手を同時に映す。
   const running=smooth(12.2,15,t);
   const encounter=smooth(18.5,21,t)*(1-smooth(27,29,t));
-  const lead=lerp(.6,2.1,running)+encounter*.55;
-  cameraTarget.set(p.x+lead,1.65+encounter*.35,0);
+  const thunderEncounter=smooth(39.5,43,t)*(1-smooth(49.5,53,t));
+  const lead=lerp(.6,2.1,running)+encounter*.55+thunderEncounter*1.6;
+
+  cameraTarget.set(
+    p.x+lead,
+    1.65+encounter*.35+thunderEncounter*1.05,
+    lerp(p.z*.40,-.15,thunderEncounter)
+  );
+
   const portrait=clamp(1.25/(innerWidth/innerHeight),1,1.65);
   cameraDesired.set(
     p.x+lead+.9,
-    3.4+running*.65+encounter*.45,
-    (9.7+running*1.3+encounter*1.8)*portrait
+    3.4+running*.65+encounter*.45+thunderEncounter*1.25,
+    p.z*.30+
+      (9.7+running*1.3+encounter*1.8+thunderEncounter*4.0)*portrait
   );
   if(instant){
     camera.position.copy(cameraDesired);cameraLook.copy(cameraTarget);
@@ -848,7 +1350,7 @@ function updateScene(t,dt,instant=false){
   $('#chapter').textContent=caption.chapter;
   $('#subtitle').textContent=caption.text;
   $('#progress').style.width=`${t/DURATION*100}%`;
-  $('#timer').textContent=`${String(Math.floor(t)).padStart(2,'0')} / 35`;
+  $('#timer').textContent=`${String(Math.floor(t)).padStart(2,'0')} / ${DURATION}`;
 }
 
 function reset(){
